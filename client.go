@@ -1,70 +1,132 @@
 package main
 
 import (
-	"bufio"
-	"fmt"
-	"net"
-	"strings"
+	"log"
+	"net/http"
+	"time"
+
+	"github.com/gorilla/websocket"
 )
 
-type client struct {
-	conn     net.Conn
-	name     string
-	room     *room
-	commands chan<- command
+const (
+	// Max wait time when writing message to peer
+	writeWait = 10 * time.Second
+
+	// Max time till next pong from peer
+	pongWait = 60 * time.Second
+
+	// Send ping interval, must be less then pong wait time
+	pingPeriod = (pongWait * 9) / 10
+
+	// Maximum message size allowed from peer.
+	maxMessageSize = 10000
+)
+
+var (
+	newline = []byte{'\n'}
+	space   = []byte{' '}
+)
+
+var upgrader = websocket.Upgrader{
+	ReadBufferSize:  4096,
+	WriteBufferSize: 4096,
 }
 
-func (c *client) readInput() {
+type Client struct {
+	conn     *websocket.Conn
+	wsServer *WsServer
+	send     chan []byte
+}
+
+func newClient(conn *websocket.Conn, wsServer *WsServer) *Client {
+	return &Client{
+		conn:     conn,
+		wsServer: wsServer,
+		send:     make(chan []byte, 256),
+	}
+}
+
+func (client *Client) readPump() {
+	defer func() {
+		client.disconnect()
+	}()
+
+	client.conn.SetReadLimit(maxMessageSize)
+	client.conn.SetReadDeadline(time.Now().Add(pongWait))
+	client.conn.SetPongHandler(func(string) error { client.conn.SetReadDeadline(time.Now().Add(pongWait)); return nil })
+
 	for {
-		msg, err := bufio.NewReader(c.conn).ReadString('\n')
+		_, jsonMessage, err := client.conn.ReadMessage()
 		if err != nil {
-			return
+			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
+				log.Printf("unexpected close error: %v", err)
+			}
+			break
 		}
 
-		msg = strings.Trim(msg, "\r\n")
+		client.wsServer.broadcast <- jsonMessage
+	}
 
-		args := strings.Split(msg, " ")
-		cmd := strings.TrimSpace(args[0])
+}
 
-		switch cmd {
-		case "/name":
-			c.commands <- command{
-				id:     CMD_NAME,
-				client: c,
-				args:   args,
+func (client *Client) writePump() {
+	ticker := time.NewTicker(pingPeriod)
+	defer func() {
+		ticker.Stop()
+		client.conn.Close()
+	}()
+	for {
+		select {
+		case message, ok := <-client.send:
+			client.conn.SetWriteDeadline(time.Now().Add(writeWait))
+			if !ok {
+				// The WsServer closed the channel.
+				client.conn.WriteMessage(websocket.CloseMessage, []byte{})
+				return
 			}
-		case "/join":
-			c.commands <- command{
-				id:     CMD_JOIN,
-				client: c,
-				args:   args,
+
+			w, err := client.conn.NextWriter(websocket.TextMessage)
+			if err != nil {
+				return
 			}
-		case "/rooms":
-			c.commands <- command{
-				id:     CMD_ROOMS,
-				client: c,
+			w.Write(message)
+
+			n := len(client.send)
+			for i := 0; i < n; i++ {
+				w.Write(newline)
+				w.Write(<-client.send)
 			}
-		case "/msg":
-			c.commands <- command{
-				id:     CMD_MSG,
-				client: c,
-				args:   args,
+
+			if err := w.Close(); err != nil {
+				return
 			}
-		case "/quit":
-			c.commands <- command{
-				id:     CMD_QUIT,
-				client: c,
+		case <-ticker.C:
+			client.conn.SetWriteDeadline(time.Now().Add(writeWait))
+			if err := client.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+				return
 			}
-		default:
-			c.err(fmt.Errorf("unknown command: %s", cmd))
 		}
 	}
 }
 
-func (c *client) err(err error) {
-	c.conn.Write([]byte("err: " + err.Error() + "\n"))
+func (c *Client) disconnect() {
+	c.wsServer.remove <- c
+	close(c.send)
+	c.conn.Close()
 }
 
-func (c *client) msg(msg string) {
-	c.conn.Write([]byte("> " + msg + "\n"))
+func ServeWs(wsServer *WsServer, w http.ResponseWriter, r *http.Request) {
+
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		log.Println(err)
+		return
+	}
+
+	client := newClient(conn, wsServer)
+
+	go client.writePump()
+	go client.readPump()
+
+	wsServer.add <- client
 }
