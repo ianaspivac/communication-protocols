@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <title>Chat</title>
+  <script type="text/javascript">
+    window.onload = function () {
+      var conn;
+      var msg = document.getElementById("msg");
+      var name = document.getElementById("name");
+      var savedName;
+      var log = document.getElementById("log");
+
+      var messagesForm = document.getElementById("form");
+      var nameForm = document.getElementById("name-form");
+      document.getElementById("log").style.display = "none";
+
+      function appendLog(item) {
+        var doScroll = log.scrollTop > log.scrollHeight - log.clientHeight - 1;
+        log.appendChild(item);
+        if (doScroll) {
+          log.scrollTop = log.scrollHeight - log.clientHeight;
+        }
+      }
+
+      function appendUser(item) {
+        user.appendChild(item);
+      }
+
+      messagesForm.onsubmit = (event) => {
+        event.preventDefault()
+        if (!conn) {
+          return false;
+        }
+        if (!msg.value) {
+          return false;
+        }
+        conn.send(`${savedName}: ${msg.value}`);
+        msg.value = "";
+        return false;
+      };
+
+      nameForm.onsubmit = (event) => {
+        event.preventDefault()
+        if (!conn) {
+          return false;
+        }
+        if (!name.value) {
+          return false;
+        }
+        savedName = name.value;
+        name.value = "";
+        messagesForm.classList.remove("hidden");
+        document.getElementById("log").style.display = "block"
+        document.getElementById("welcome-text").classList.add("hidden");
+        document.getElementById("username").innerHTML = savedName;
+      };
+
+      if (window["WebSocket"]) {
+        conn = new WebSocket("ws://" + document.location.host + "/ws");
+        conn.onclose = () => {
+          var item = document.createElement("div");
+          item.innerHTML = "<b>Disconnected</b>";
+          appendLog(item);
+        };
+        conn.onmessage = (e) => {
+          var messages = e.data.split('\n');
+          for (var i = 0; i < messages.length; i++) {
+            var item = document.createElement("div")
+            item.appendChild(document.createTextNode(messages[i]));
+            appendLog(item);
+          }
+        };
+      } else {
+        var item = document.createElement("div");
+        item.innerHTML = "<b>Your browser does not support WebSockets.</b>";
+        appendLog(item);
+      };
+    };
+  </script>
+  <style type="text/css">
+    html {
+      overflow: hidden;
+    }
+
+    body {
+      overflow: hidden;
+      padding: 0;
+      margin: 0;
+      width: 100%;
+      height: 100%;
+      background: #3d506c;
+    }
+
+    #log {
+      background: white;
+      margin: 0;
+      padding: 10px;
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      right: 10px;
+      bottom: 100px;
+      overflow: auto;
+    }
+
+    #form {
+      padding: 0 0.5em 0 0.5em;
+      margin: 0;
+      position: absolute;
+      bottom: 1em;
+      left: 0;
+      width: 100%;
+      overflow: hidden;
+    }
+
+    #msg {
+      border: none;
+      border-radius: 5px;
+      box-shadow: 0 0 24px 0 rgba(0, 0, 0, 0.43) inset;
+      padding: 10px 15px;
+      width: 80%;
+    }
+
+    #welcome-text {
+      align-items: center;
+      display: flex;
+      color: white;
+      flex-direction: column;
+      margin: auto;
+      margin-top: 50px;
+      position: relative;
+      width: 900px;
+      z-index: 1;
+    }
+
+    #welcome-text h1 {
+      margin-bottom: 0;
+    }
+
+    input#name {
+      border: 1px solid #3d506c;
+      border-radius: 5px;
+      padding: 10px 15px;
+    }
+
+    #name-form input[type=submit] {
+      color: #3d506c;
+      border: none;
+      border-radius: 5px;
+      background: white;
+      padding: 10px 15px;
+    }
+
+    #form input[type=submit] {
+      background: white;
+      border: none;
+      border-radius: 5px;
+      color: #3d506c;
+      padding: 10px 15px;
+      width: 150px;
+    }
+
+    .hidden {
+      display: none !important;
+    }
+
+    #username {
+      color: white;
+      margin-bottom: 10px;
+    }
+
+  </style>
+</head>
+<body>
+<div id="messages"></div>
+<div id="welcome-text">
+  <h1>Welcome to the chat</h1>
+  <h2>Enter your name</h2>
+  <form id="name-form">
+    <input type="text" id="name" placeholder="Enter name...">
+    <input type="submit" value="Save"/>
+  </form>
+</div>
+<div id="log"></div>
+<form id="form" class="hidden">
+  <div class="message-input">
+    <div id="username"></div>
+    <input type="text" id="msg" size="64" autofocus/>
+    <input type="submit" value="Send"/>
+  </div>
+</form>
+</body>
+</html>
